@@ -12,6 +12,8 @@
  */
 namespace Binance;
 
+use Exception;
+
 // PHP version check
 if (version_compare(phpversion(), '7.0', '<=')) {
     fwrite(STDERR, "Hi, PHP " . phpversion() . " support will be removed very soon as part of continued development.\n");
@@ -28,11 +30,14 @@ if (version_compare(phpversion(), '7.0', '<=')) {
 class API
 {
     protected $base = 'https://api.binance.com/api/'; // /< REST endpoint for the currency exchange
+    protected $baseTestnet = 'https://testnet.binance.vision/api/'; // /< Testnet REST endpoint for the currency exchange
     protected $wapi = 'https://api.binance.com/wapi/'; // /< REST endpoint for the withdrawals
     protected $sapi = 'https://api.binance.com/sapi/'; // /< REST endpoint for the supporting network API
     protected $stream = 'wss://stream.binance.com:9443/ws/'; // /< Endpoint for establishing websocket connections
+    protected $streamTestnet = 'wss://testnet.binance.vision/ws/'; // /< Testnet endpoint for establishing websocket connections
     protected $api_key; // /< API key that you created in the binance website member area
     protected $api_secret; // /< API secret that was given to you when you created the api key
+    protected $useTestnet = false; // /< Enable/disable testnet (https://testnet.binance.vision/)
     protected $depthCache = []; // /< Websockets depth cache
     protected $depthQueue = []; // /< Websockets depth queue
     protected $chartQueue = []; // /< Websockets chart queue
@@ -52,7 +57,7 @@ class API
 
     // /< value of available onOrder assets
     
-    protected $exchangeInfo = NULL;
+    protected $exchangeInfo = null;
     protected $lastRequest = [];
 
     protected $xMbxUsedWeight = 0;
@@ -65,6 +70,7 @@ class API
      * No arguments - use file setup
      * 1 argument - file to load config from
      * 2 arguments - api key and api secret
+     * 3 arguments - api key, api secret and use testnet flag
      *
      * @return null
      */
@@ -85,6 +91,11 @@ class API
             case 2:
                 $this->api_key = $param[0];
                 $this->api_secret = $param[1];
+                break;
+            case 3:
+                $this->api_key = $param[0];
+                $this->api_secret = $param[1];
+                $this->useTestnet = (bool)$param[2];
                 break;
             default:
                 echo 'Please see valid constructors here: https://github.com/jaggedsoft/php-binance-api/blob/master/examples/constructor.php';
@@ -139,6 +150,7 @@ class API
         $contents = json_decode(file_get_contents($file), true);
         $this->api_key = isset($contents['api-key']) ? $contents['api-key'] : "";
         $this->api_secret = isset($contents['api-secret']) ? $contents['api-secret'] : "";
+        $this->useTestnet = isset($contents['use-testnet']) ? (bool)$contents['use-testnet'] : false;
     }
 
     /**
@@ -300,6 +312,41 @@ class API
     }
 
     /**
+     * marketQuoteBuy attempts to create a currency order at given market price
+     *
+     * $quantity = 1;
+     * $order = $api->marketQuoteBuy("BNBBTC", $quantity);
+     *
+     * @param $symbol string the currency symbol
+     * @param $quantity string the quantity of the quote to use
+     * @param $flags array additional options for order type
+     * @return array with error message or the order details
+     */
+    public function marketQuoteBuy(string $symbol, $quantity, array $flags = [])
+    {
+        $flags['isQuoteOrder'] = true;
+
+        return $this->order("BUY", $symbol, $quantity, 0, "MARKET", $flags);
+    }
+
+    /**
+     * marketQuoteBuyTest attempts to create a TEST currency order at given market price
+     *
+     * @see marketBuy()
+     *
+     * @param $symbol string the currency symbol
+     * @param $quantity string the quantity of the quote to use
+     * @param $flags array additional options for order type
+     * @return array with error message or the order details
+     */
+    public function marketQuoteBuyTest(string $symbol, $quantity, array $flags = [])
+    {
+        $flags['isQuoteOrder'] = true;
+
+        return $this->order("BUY", $symbol, $quantity, 0, "MARKET", $flags, true);
+    }
+
+    /**
      * marketBuy attempts to create a currency order at given market price
      *
      * $quantity = 1;
@@ -329,8 +376,8 @@ class API
     {
         return $this->order("BUY", $symbol, $quantity, 0, "MARKET", $flags, true);
     }
-	
-	
+    
+    
     /**
      * numberOfDecimals() returns the signifcant digits level based on the minimum order amount.
      *
@@ -339,11 +386,49 @@ class API
      * @param $val float the minimum order amount for the pair
      * @return integer (signifcant digits) based on the minimum order amount
      */
-    public function numberOfDecimals($val = 0.00000001){
+    public function numberOfDecimals($val = 0.00000001)
+    {
         $val = sprintf("%.14f", $val);
-        $parts = explode('.', $val); 
+        $parts = explode('.', $val);
         $parts[1] = rtrim($parts[1], "0");
         return strlen($parts[1]);
+    }
+
+    /**
+     * marketQuoteSell attempts to create a currency order at given market price
+     *
+     * $quantity = 1;
+     * $order = $api->marketQuoteSell("BNBBTC", $quantity);
+     *
+     * @param $symbol string the currency symbol
+     * @param $quantity string the quantity of the quote you want to obtain
+     * @param $flags array additional options for order type
+     * @return array with error message or the order details
+     */
+    public function marketQuoteSell(string $symbol, $quantity, array $flags = [])
+    {
+        $flags['isQuoteOrder'] = true;
+        $c = $this->numberOfDecimals($this->exchangeInfo()['symbols'][$symbol]['filters'][2]['minQty']);
+        $quantity = $this->floorDecimal($quantity, $c);
+
+        return $this->order("SELL", $symbol, $quantity, 0, "MARKET", $flags);
+    }
+
+    /**
+     * marketQuoteSellTest attempts to create a TEST currency order at given market price
+     *
+     * @see marketSellTest()
+     *
+     * @param $symbol string the currency symbol
+     * @param $quantity string the quantity of the quote you want to obtain
+     * @param $flags array additional options for order type
+     * @return array with error message or the order details
+     */
+    public function marketQuoteSellTest(string $symbol, $quantity, array $flags = [])
+    {
+        $flags['isQuoteOrder'] = true;
+
+        return $this->order("SELL", $symbol, $quantity, 0, "MARKET", $flags, true);
     }
 
     /**
@@ -442,6 +527,24 @@ class API
     }
 
     /**
+     * Cancel all open orders method
+     * $api->cancelOpenOrders( "BNBBTC" );
+     * @param $symbol string the currency symbol
+     * @return array with error message or the order details
+     * @throws \Exception
+     */
+    public function cancelOpenOrders(string $symbol = null)
+    {
+        $params = [];
+        if (is_null($symbol) != true) {
+            $params = [
+                "symbol" => $symbol,
+            ];
+        }
+        return $this->httpRequest("v3/openOrders", "DELETE", $params, true);
+    }
+
+    /**
      * orders attempts to get the orders for all or a specific currency
      *
      * $allBNBOrders = $api->orders( "BNBBTC" );
@@ -453,17 +556,19 @@ class API
      * @return array with error message or array of orderDetails array
      * @throws \Exception
      */
-    public function orders(string $symbol, int $limit = 500, int $fromOrderId = 0, array $params = []) {
-	$params["symbol"] = $symbol;
-	$params["limit"] = $limit;
-        if ( $fromOrderId ) $params["orderId"] = $fromOrderId;
+    public function orders(string $symbol, int $limit = 500, int $fromOrderId = 0, array $params = [])
+    {
+        $params["symbol"] = $symbol;
+        $params["limit"] = $limit;
+        if ($fromOrderId) {
+            $params["orderId"] = $fromOrderId;
+        }
         return $this->httpRequest("v3/allOrders", "GET", $params, true);
     }
 
     /**
      * history Get the complete account trade history for all or a specific currency
      *
-     * $allHistory = $api->history();
      * $BNBHistory = $api->history("BNBBTC");
      * $limitBNBHistory = $api->history("BNBBTC",5);
      * $limitBNBHistoryFromId = $api->history("BNBBTC",5,3);
@@ -526,17 +631,15 @@ class API
      */
     public function exchangeInfo()
     {
-        if(!$this->exchangeInfo){
-            
+        if (!$this->exchangeInfo) {
             $arr = $this->httpRequest("v1/exchangeInfo");
             
             $this->exchangeInfo = $arr;
             $this->exchangeInfo['symbols'] = null;
             
-            foreach($arr['symbols'] as $key => $value){
+            foreach ($arr['symbols'] as $key => $value) {
                 $this->exchangeInfo['symbols'][$value['symbol']] = $value;
             }
-            
         }
         
         return $this->exchangeInfo;
@@ -547,8 +650,13 @@ class API
         $params["wapi"] = true;
         return $this->httpRequest("v3/assetDetail.html", 'GET', $params, true);
     }
-	
-	
+    
+    public function userAssetDribbletLog()
+    {
+        $params["wapi"] = true;
+        return $this->httpRequest("v3/userAssetDribbletLog.html", 'GET', $params, true);
+    }
+    
     /**
      * Fetch current(daily) trade fee of symbol, values in percentage.
      * for more info visit binance official api document
@@ -559,11 +667,11 @@ class API
      */
     public function tradeFee(string $symbol)
     {
-	$params = [
+        $params = [
             "symbol" => $symbol,
             "wapi" => true,
         ];
-	    
+        
         return $this->httpRequest("v3/tradeFee.html", 'GET', $params, true);
     }
 
@@ -587,7 +695,7 @@ class API
      * @return array with error message or array transaction
      * @throws \Exception
      */
-    public function withdraw(string $asset, string $address, $amount, $addressTag = null, $addressName = "", bool $transactionFeeFlag = false,$network = null)
+    public function withdraw(string $asset, string $address, $amount, $addressTag = null, $addressName = "", bool $transactionFeeFlag = false, $network = null)
     {
         $options = [
             "asset" => $asset,
@@ -779,6 +887,35 @@ class API
             "symbol" => $symbol,
         ]));
     }
+    
+    /**
+     * historicalTrades Get historical trades for a specific currency
+     *
+     * $ENJHistTrades = $api->historicalTrades("ENJUSDT");
+     * $limitENJHistTrades = $api->historicalTrades("ENJUSDT",5);
+     * $limitENJHistTradesFromId = $api->historicalTrades("ENJUSDT",5,3);
+     *
+     * @param $symbol string (mandatory) the currency symbol
+     * @param $limit int (optional) the amount of trades returned, default=500 max=1000
+     * @param $fromTradeId int (optional) return the orders from this order onwards. negative for all
+     * @return Array of trades
+     * @throws \Exception
+     */
+    public function historicalTrades(string $symbol, int $limit = 500, int $fromTradeId = -1)
+    {
+        $parameters = [
+            "symbol" => $symbol,
+            "limit" => $limit,
+        ];
+        if ($fromTradeId > 0) {
+            $parameters["fromId"] = $fromTradeId;
+        }
+        
+        // The endpoint cannot handle extra parameters like 'timestamp' or 'signature',
+        // but it needs the http header with the key so we need to construct it here
+        $query = http_build_query($parameters, '', '&');
+        return $this->httpRequest("v3/historicalTrades?$query");
+    }
 
     /**
      * depth get Market depth
@@ -834,10 +971,22 @@ class API
 
         if (isset($account['balances']) === false || empty($account['balances'])) {
             echo "Error: your balances were empty or unset" . PHP_EOL;
-	    return [];
+            return [];
         }
 
         return $this->balanceData($account, $priceData);
+    }
+
+    /**
+     * coins get list coins
+     *
+     * $coins = $api->coins();
+     * @return array with error message or array containing coins
+     * @throws \Exception
+     */
+    public function coins()
+    {
+        return $this->httpRequest('v1/capital/config/getall', 'GET', [ 'sapi' => true ], true);
     }
 
     /**
@@ -946,25 +1095,31 @@ class API
                 throw new \Exception("signedRequest error: API Secret not set!");
             }
 
-            $base = $this->base;
+            $base = $this->getRestEndpoint();
             $ts = (microtime(true) * 1000) + $this->info['timeOffset'];
             $params['timestamp'] = number_format($ts, 0, '.', '');
             if (isset($params['wapi'])) {
+                if ($this->useTestnet) {
+                    throw new \Exception("wapi endpoints are not available in testnet");
+                }
                 unset($params['wapi']);
                 $base = $this->wapi;
             }
-		
+        
             if (isset($params['sapi'])) {
+                if ($this->useTestnet) {
+                    throw new \Exception("sapi endpoints are not available in testnet");
+                }
                 unset($params['sapi']);
                 $base = $this->sapi;
             }
-		
+        
             $query = http_build_query($params, '', '&');
             $signature = hash_hmac('sha256', $query, $this->api_secret);
             if ($method === "POST") {
                 $endpoint = $base . $url;
-				$params['signature'] = $signature; // signature needs to be inside BODY
-				$query = http_build_query($params, '', '&'); // rebuilding query
+                $params['signature'] = $signature; // signature needs to be inside BODY
+                $query = http_build_query($params, '', '&'); // rebuilding query
             } else {
                 $endpoint = $base . $url . '?' . $query . '&signature=' . $signature;
             }
@@ -975,12 +1130,12 @@ class API
             ));
         }
         // params so buildquery string and append to url
-        else if (count($params) > 0) {
-            curl_setopt($curl, CURLOPT_URL, $this->base . $url . '?' . $query);
+        elseif (count($params) > 0) {
+            curl_setopt($curl, CURLOPT_URL, $this->getRestEndpoint() . $url . '?' . $query);
         }
         // no params so just the base url
         else {
-            curl_setopt($curl, CURLOPT_URL, $this->base . $url);
+            curl_setopt($curl, CURLOPT_URL, $this->getRestEndpoint() . $url);
             curl_setopt($curl, CURLOPT_HTTPHEADER, array(
                 'X-MBX-APIKEY: ' . $this->api_key,
             ));
@@ -1056,7 +1211,7 @@ class API
             $this->setXMbxUsedWeight1m($header['x-mbx-used-weight-1m']);
         }
 
-        if(isset($json['msg'])){
+        if (isset($json['msg']) && !empty($json['msg'])) {
             // should always output error, not only on httpdebug
             // not outputing errors, hides it from users and ends up with tickets on github
             throw new \Exception('signedRequest error: '.print_r($output, true));
@@ -1115,6 +1270,11 @@ class API
         if ($type === "LIMIT" || $type === "STOP_LOSS_LIMIT" || $type === "TAKE_PROFIT_LIMIT") {
             $opt["price"] = $price;
             $opt["timeInForce"] = "GTC";
+        }
+
+        if ($type === "MARKET" && isset($flags['isQuoteOrder']) && $flags['isQuoteOrder']) {
+            unset($opt['quantity']);
+            $opt['quoteOrderQty'] = $quantity;
         }
 
         if (isset($flags['stopPrice'])) {
@@ -1235,7 +1395,7 @@ class API
                 $btc_value += $obj['free'];
                 $btc_total += $obj['free'] + $obj['locked'];
                 continue;
-            } elseif ( $asset === 'USDT' || $asset === 'USDC' || $asset === 'PAX' || $asset === 'BUSD' ) {
+            } elseif ($asset === 'USDT' || $asset === 'USDC' || $asset === 'PAX' || $asset === 'BUSD') {
                 $btcValue = $obj['free'] / $priceData['BTCUSDT'];
                 $btcTotal = ($obj['free'] + $obj['locked']) / $priceData['BTCUSDT'];
                 $balances[$asset]['btcValue'] = $btcValue;
@@ -1716,14 +1876,12 @@ class API
             if ($bid[1] == "0.00000000") {
                 unset($this->depthCache[$symbol]['bids'][$bid[0]]);
             }
-
         }
         foreach ($json['a'] as $ask) {
             $this->depthCache[$symbol]['asks'][$ask[0]] = $ask[1];
             if ($ask[1] == "0.00000000") {
                 unset($this->depthCache[$symbol]['asks'][$ask[0]]);
             }
-
         }
     }
 
@@ -1838,7 +1996,7 @@ class API
             $endpoint = strtolower($symbol) . '@depthCache';
             $this->subscriptions[$endpoint] = true;
 
-            $connector($this->stream . strtolower($symbol) . '@depth')->then(function ($ws) use ($callback, $symbol, $loop, $endpoint) {
+            $connector($this->getWsEndpoint() . strtolower($symbol) . '@depth')->then(function ($ws) use ($callback, $symbol, $loop, $endpoint) {
                 $ws->on('message', function ($data) use ($ws, $callback, $loop, $endpoint) {
                     if ($this->subscriptions[$endpoint] === false) {
                         //$this->subscriptions[$endpoint] = null;
@@ -1908,7 +2066,7 @@ class API
             $endpoint = strtolower($symbol) . '@trades';
             $this->subscriptions[$endpoint] = true;
 
-            $connector($this->stream . strtolower($symbol) . '@aggTrade')->then(function ($ws) use ($callback, $symbol, $loop, $endpoint) {
+            $connector($this->getWsEndpoint() . strtolower($symbol) . '@aggTrade')->then(function ($ws) use ($callback, $symbol, $loop, $endpoint) {
                 $ws->on('message', function ($data) use ($ws, $callback, $loop, $endpoint) {
                     if ($this->subscriptions[$endpoint] === false) {
                         //$this->subscriptions[$endpoint] = null;
@@ -1962,7 +2120,7 @@ class API
 
         // @codeCoverageIgnoreStart
         // phpunit can't cover async function
-        \Ratchet\Client\connect($this->stream . $endpoint)->then(function ($ws) use ($callback, $symbol, $endpoint) {
+        \Ratchet\Client\connect($this->getWsEndpoint() . $endpoint)->then(function ($ws) use ($callback, $symbol, $endpoint) {
             $ws->on('message', function ($data) use ($ws, $callback, $symbol, $endpoint) {
                 if ($this->subscriptions[$endpoint] === false) {
                     //$this->subscriptions[$endpoint] = null;
@@ -2006,8 +2164,11 @@ class API
      * @return null
      * @throws \Exception
      */
-    public function chart($symbols, callable $callback, string $interval = "30m", $limit = 500)
+    public function chart($symbols, string $interval = "30m", callable $callback = null, $limit = 500)
     {
+        if (is_null($callback)) {
+            throw new Exception("You must provide a valid callback");
+        }
         if (!is_array($symbols)) {
             $symbols = [
                 $symbols,
@@ -2039,7 +2200,7 @@ class API
             $this->info[$symbol][$interval]['firstOpen'] = 0;
             $endpoint = strtolower($symbol) . '@kline_' . $interval;
             $this->subscriptions[$endpoint] = true;
-            $connector($this->stream . $endpoint)->then(function ($ws) use ($callback, $symbol, $loop, $endpoint, $interval) {
+            $connector($this->getWsEndpoint() . $endpoint)->then(function ($ws) use ($callback, $symbol, $loop, $endpoint, $interval) {
                 $ws->on('message', function ($data) use ($ws, $loop, $callback, $endpoint) {
                     if ($this->subscriptions[$endpoint] === false) {
                         //$this->subscriptions[$endpoint] = null;
@@ -2087,8 +2248,11 @@ class API
      * @return null
      * @throws \Exception
      */
-    public function kline($symbols, callable $callback, string $interval = "30m")
+    public function kline($symbols, string $interval = "30m", callable $callback = null)
     {
+        if (is_null($callback)) {
+            throw new Exception("You must provide a valid callback");
+        }
         if (!is_array($symbols)) {
             $symbols = [
                 $symbols,
@@ -2101,7 +2265,7 @@ class API
         foreach ($symbols as $symbol) {
             $endpoint = strtolower($symbol) . '@kline_' . $interval;
             $this->subscriptions[$endpoint] = true;
-            $connector($this->stream . $endpoint)->then(function ($ws) use ($callback, $symbol, $loop, $endpoint, $interval) {
+            $connector($this->getWsEndpoint() . $endpoint)->then(function ($ws) use ($callback, $symbol, $loop, $endpoint, $interval) {
                 $ws->on('message', function ($data) use ($ws, $loop, $callback, $endpoint) {
                     if ($this->subscriptions[$endpoint] === false) {
                         $loop->stop();
@@ -2204,9 +2368,16 @@ class API
 
         $this->subscriptions['@userdata'] = true;
 
+        $loop = \React\EventLoop\Factory::create();
+        $loop->addPeriodicTimer(30*60, function () {
+            $listenKey = $this->listenKey;
+            $this->httpRequest("v1/userDataStream?listenKey={$listenKey}", "PUT", []);
+        });
+        $connector = new \Ratchet\Client\Connector($loop);
+
         // @codeCoverageIgnoreStart
         // phpunit can't cover async function
-        \Ratchet\Client\connect($this->stream . $this->listenKey)->then(function ($ws) {
+        $connector($this->getWsEndpoint() . $this->listenKey)->then(function ($ws) {
             $ws->on('message', function ($data) use ($ws) {
                 if ($this->subscriptions['@userdata'] === false) {
                     //$this->subscriptions[$endpoint] = null;
@@ -2233,7 +2404,8 @@ class API
             // WPCS: XSS OK.
             echo "userData: Could not connect: {$e->getMessage()}" . PHP_EOL;
         });
-        // @codeCoverageIgnoreEnd
+
+        $loop->run();
     }
 
     /**
@@ -2253,7 +2425,7 @@ class API
 
         // @codeCoverageIgnoreStart
         // phpunit can't cover async function
-        \Ratchet\Client\connect($this->stream . '!miniTicker@arr')->then(function ($ws) use ($callback, $endpoint) {
+        \Ratchet\Client\connect($this->getWsEndpoint() . '!miniTicker@arr')->then(function ($ws) use ($callback, $endpoint) {
             $ws->on('message', function ($data) use ($ws, $callback, $endpoint) {
                 if ($this->subscriptions[$endpoint] === false) {
                     //$this->subscriptions[$endpoint] = null;
@@ -2287,7 +2459,7 @@ class API
         // @codeCoverageIgnoreEnd
     }
 
-	/**
+    /**
      * bookTicker Get bookTicker for all symbols
      *
      * $api->bookTicker(function($api, $ticker) {
@@ -2297,14 +2469,14 @@ class API
      * @param $callback callable function closer that takes 2 arguments, $api and $ticker data
      * @return null
      */
-	public function bookTicker(callable $callback)
+    public function bookTicker(callable $callback)
     {
         $endpoint = '!bookticker';
         $this->subscriptions[$endpoint] = true;
 
         // @codeCoverageIgnoreStart
         // phpunit can't cover async function
-        \Ratchet\Client\connect($this->stream . '!bookTicker')->then(function ($ws) use ($callback, $endpoint) {
+        \Ratchet\Client\connect($this->getWsEndpoint() . '!bookTicker')->then(function ($ws) use ($callback, $endpoint) {
             $ws->on('message', function ($data) use ($ws, $callback, $endpoint) {
                 if ($this->subscriptions[$endpoint] === false) {
                     //$this->subscriptions[$endpoint] = null;
@@ -2313,14 +2485,14 @@ class API
                 }
                 $json = json_decode($data, true);
 
-				$markets = [
-					"updateId"  => $json['u'],
-					"symbol"    => $json['s'],
-					"bid_price" => $json['b'],
-					"bid_qty"   => $json['B'],
-					"ask_price" => $json['a'],
-					"ask_qty"   => $json['A'],
-				];
+                $markets = [
+                    "updateId"  => $json['u'],
+                    "symbol"    => $json['s'],
+                    "bid_price" => $json['b'],
+                    "bid_qty"   => $json['B'],
+                    "ask_price" => $json['a'],
+                    "ask_qty"   => $json['A'],
+                ];
                 call_user_func($callback, $this, $markets);
             });
             $ws->on('close', function ($code = null, $reason = null) {
@@ -2347,7 +2519,7 @@ class API
             die(getcwd() . ' folder is not writeable, please check your permissions to download CA Certificates, or use $api->caOverride = true;');
         }
 
-        $host = "https://curl.haxx.se/ca/cacert.pem";
+        $host = "https://curl.se/ca/cacert.pem";
         $curl = curl_init();
         curl_setopt($curl, CURLOPT_URL, $host);
         curl_setopt($curl, CURLOPT_VERBOSE, 0);
@@ -2384,25 +2556,43 @@ class API
     }
     
     protected function floorDecimal($n, $decimals=2)
-    {   
+    {
         return floor($n * pow(10, $decimals)) / pow(10, $decimals);
     }
 
 
-    protected function setXMbxUsedWeight (int $usedWeight) : void {
+    protected function setXMbxUsedWeight(int $usedWeight) : void
+    {
         $this->xMbxUsedWeight = $usedWeight;
     }
 
-    protected function setXMbxUsedWeight1m (int $usedWeight1m) : void {
+    protected function setXMbxUsedWeight1m(int $usedWeight1m) : void
+    {
         $this->xMbxUsedWeight1m = $usedWeight1m;
     }
 
-    public function getXMbxUsedWeight () : int {
+    public function getXMbxUsedWeight() : int
+    {
         $this->xMbxUsedWeight;
     }
 
-    public function getXMbxUsedWeight1m () : int {
+    public function getXMbxUsedWeight1m() : int
+    {
         $this->xMbxUsedWeight1m;
     }
-    
+
+    private function getRestEndpoint() : string
+    {
+        return $this->useTestnet ? $this->baseTestnet : $this->base;
+    }
+
+    private function getWsEndpoint() : string
+    {
+        return $this->useTestnet ? $this->streamTestnet : $this->stream;
+    }
+
+    public function isOnTestnet() : bool
+    {
+        return $this->useTestnet;
+    }
 }
