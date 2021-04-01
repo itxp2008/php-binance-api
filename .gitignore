@@ -2,6 +2,7 @@ composer.lock
 vendor**
 .buildpath
 .project
+.history
 .settings/**
 
 .DS_Store
