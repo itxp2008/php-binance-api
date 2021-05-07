@@ -1264,7 +1264,7 @@ class API
         }
         if (is_array($priceData)) {
             uasort($balances, function ($opA, $opB) {
-                return $opA['btcValue'] < $opB['btcValue'];
+                return $opB['btcValue'] <=> $opA['btcValue'];
             });
             $this->btc_value = $btc_value;
             $this->btc_total = $btc_total;
